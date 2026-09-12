@@ -308,9 +308,12 @@ agent port, and every entry into it is visible in the container logs.
 
 The CI vault uses dummy OAuth credentials, which is sufficient: the Google
 Login plugin does not contact Google until someone actually signs in, so the
-controller boots and serves its login page. The smoke step then asserts the
-realm applied and that anonymous users are denied — the security properties,
-not just liveness. Recovery mode is booted too, because a break-glass path is
+controller boots and serves its login page. The smoke step then asserts the security
+properties rather than mere liveness: that `securityRealm/commenceLogin`
+redirects into Google's OAuth flow carrying **the client ID from the vault** and
+**the redirect URI derived from `JENKINS_URL`** (so a `redirect_uri_mismatch` is
+caught in CI, not on a user's first login), that anonymous `/api/json` is
+denied, and that the logs contain no JCasC errors. Recovery mode is booted too, because a break-glass path is
 needed exactly when nobody can log in to test it.
 
 The workflow declares `permissions: contents: read` and uses only

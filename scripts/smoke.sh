@@ -51,14 +51,58 @@ assert_login_page() {
 	fi
 }
 
-assert_google_signin_offered() {
-	local base=$1 body
-	body=$(curl -fsS "${base}/login" 2>/dev/null || true)
-	if printf '%s' "$body" | grep -Eqi 'commencelogin|google'; then
-		pass "login page offers Google sign-in"
-	else
-		fail "login page does not reference Google -- is the googleOAuth2 realm applied?"
+# Prove the Google realm is wired up end to end.
+#
+# Scraping /login for the word "Google" was a bad proxy and gave a false
+# failure: this realm serves no login form at all. Its getLoginUrl() is
+# securityRealm/commenceLogin, and that endpoint answers with a redirect to
+# Google's authorization URL. That URL is far better evidence, because it must
+# carry three things we care about:
+#   - accounts.google.com                      the realm is active
+#   - our client_id                            the vault secret reached JCasC,
+#                                              through /run/secrets
+#   - <JENKINS_URL>securityRealm/finishLogin   the redirect URI Jenkins will
+#                                              actually send, which must match
+#                                              what is registered in Google
+#                                              Cloud or login fails with
+#                                              redirect_uri_mismatch
+assert_google_oauth_redirect() {
+	local base=$1 endpoint location decoded client_id url expected code
+	endpoint="${base}/securityRealm/commenceLogin?from=%2F"
+
+	location=$(curl -s -o /dev/null -w '%{redirect_url}' "$endpoint" 2>/dev/null || true)
+	if [ -z "$location" ]; then
+		code=$(curl -s -o /dev/null -w '%{http_code}' "$endpoint" 2>/dev/null || true)
+		fail "GET /securityRealm/commenceLogin did not redirect (HTTP ${code}) -- is the googleOAuth2 realm applied?"
+		return 0
 	fi
+
+	case "$location" in
+	*accounts.google.com*) pass "login redirects to accounts.google.com" ;;
+	*) fail "login redirects to '${location}', not to accounts.google.com" ;;
+	esac
+
+	client_id=$(env_get "$OAUTH_ENV" GOOGLE_OAUTH_CLIENT_ID)
+	if [ -n "$client_id" ]; then
+		case "$location" in
+		*"$client_id"*) pass "authorization URL carries the configured client_id" ;;
+		*) fail "authorization URL does not carry the client_id from vault/oauth.env" ;;
+		esac
+	fi
+
+	# Normalise percent-encoding before comparing, so this does not depend on
+	# how the OAuth library chose to encode the embedded redirect_uri.
+	decoded=${location//%3A/:}
+	decoded=${decoded//%2F//}
+	url=$(env_get "$SETTINGS_ENV" JENKINS_URL)
+	expected="${url}securityRealm/finishLogin"
+	case "$decoded" in
+	*"$expected"*) pass "redirect_uri is ${expected}" ;;
+	*)
+		fail "redirect_uri is not ${expected} -- Google would answer redirect_uri_mismatch"
+		log_error "        authorization URL was: ${location}"
+		;;
+	esac
 }
 
 # The important one. Jenkins' defaults are permissive; this proves the
@@ -93,7 +137,7 @@ main() {
 	log_info "target ${base}"
 
 	assert_login_page "$base"
-	assert_google_signin_offered "$base"
+	assert_google_oauth_redirect "$base"
 	assert_anonymous_denied "$base"
 	assert_no_casc_errors
 
