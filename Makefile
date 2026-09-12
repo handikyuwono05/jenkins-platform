@@ -149,7 +149,7 @@ recovery-up: render ## Restart with the local break-glass admin (OAuth off)
 	@$(LOCK); \
 	echo "Starting in RECOVERY MODE -- Google OAuth disabled, local admin only."; \
 	echo "Username: recovery-admin"; \
-	printf 'Password: '; $(SCRIPTS)/vaultctl.sh recovery-password; \
+	$(SCRIPTS)/vaultctl.sh recovery-password; \
 	CASC_JENKINS_CONFIG=$(RECOVERY_CASC) $(COMPOSE) up -d --force-recreate; \
 	echo "Rotate the password after use: make recovery-rotate"
 

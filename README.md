@@ -363,19 +363,31 @@ single host. Before it carries regulated workloads:
 Every JCasC key here was checked against the plugins' own source rather than
 written from memory — `googleOAuth2` (`clientId`/`clientSecret`/`domain`), the
 `securityRealm/finishLogin` callback path, `globalMatrix.entries` with
-`user`/`group` children, `audit-trail` with its `console` logger, and JCasC's
-`/run/secrets/<name>` file-secret resolution. The base image digest was
-resolved from Docker Hub and matches tag `2.568.3-lts-jdk21`.
+`user`/`group` children, `audit-trail` with its `console` logger, `apiToken`,
+and JCasC's `/run/secrets/<name>` file-secret resolution. The base image digest
+was resolved from Docker Hub and matches tag `2.568.3-lts-jdk21`.
 
-Locally verified: shellcheck clean at `-S style` across all scripts, yamllint
-clean, the Makefile parses, and the preflight guards were exercised against
-valid and invalid inputs — missing trailing slash, admin outside the allowlist,
-plain HTTP off localhost, empty and stale secrets, drifted digest pin, and an
-attempted command injection through an env file.
+**The controller is verified by CI on every push**, not merely linted. A green
+`build-and-smoke` job means all of the following actually happened on a runner:
 
-**The image build and Jenkins boot were not executed locally**, because no
-Docker daemon was available in the environment where this was authored. That
-is exactly the gap `build-and-smoke` closes: the first CI run on this branch
-either goes green — proving the image builds, JCasC applies, the login page
-serves Google sign-in, anonymous access is denied and recovery mode boots — or
-it fails and names the offending key in the job log.
+| Verified | Evidence |
+|---|---|
+| The image builds from the pinned digest | `Build image` |
+| Jenkins boots and JCasC applies cleanly | healthy in ~15s; no JCasC errors in the log |
+| The Google realm is live | `securityRealm/commenceLogin` redirects to `accounts.google.com` |
+| Secrets reach JCasC through `/run/secrets` | the authorization URL carries the configured client ID |
+| `JENKINS_URL` yields the right callback | `redirect_uri is http://localhost:8080/securityRealm/finishLogin` |
+| Authorization is enforced | anonymous `GET /api/json` → 403 |
+| Break-glass recovery works | recovery mode boots healthy and serves `/login` |
+
+Four earlier CI rounds each caught a real defect that YAML linting could not:
+a JCasC attribute (`excludeClientIPFromCrumb`) that no longer exists on
+`DefaultCrumbIssuer`; secrets written `0600` that the container's uid could not
+read; a `render` step that could not repair those permissions; and a smoke
+assertion that scraped the login page for text this realm never serves. Each is
+now covered by a preflight check or a smoke assertion.
+
+What CI still cannot prove: that **your** Google OAuth client is correct. CI
+runs with dummy credentials, so the first real sign-in is still the first test
+of the client ID, secret, and the redirect URI you registered in Google Cloud.
+Run `make oauth-info` and paste that redirect URI verbatim.

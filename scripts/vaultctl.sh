@@ -248,7 +248,7 @@ cmd_recovery_password() {
 		log_warn "run '$0 recovery-password' from a terminal, or --force to override"
 		return 0
 	fi
-	printf '%s\n' "$value"
+	printf 'Password: %s\n' "$value"
 }
 
 main() {
