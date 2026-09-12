@@ -1,0 +1,9 @@
+# Secrets and local configuration must never be committed.
+.env
+secrets/*
+!secrets/.gitkeep
+!secrets/README.md
+
+# Local artifacts
+backups/
+.make-lock/

@@ -1,0 +1,88 @@
+# Compose definition for the Jenkins controller.
+#
+# Secrets are file-mounted (not environment variables) so they do not appear
+# in `docker inspect`, in the container's /proc/1/environ, or in crash dumps.
+name: jenkins-platform
+
+services:
+  jenkins:
+    build:
+      context: .
+      args:
+        # Keep in sync with the Dockerfile's JENKINS_BASE default;
+        # `make validate` fails the build if the two ever drift.
+        JENKINS_BASE: "${JENKINS_BASE:-jenkins/jenkins:2.568.3-lts-jdk21@sha256:c1e4c349365f6d16d88595b2c5f7e8ff39b8ae1d061f62420bac193b4b9616d0}"
+        TZ: "${TZ:-Asia/Jakarta}"
+        BUILD_REVISION: "${BUILD_REVISION:-unknown}"
+    image: "${IMAGE_NAME:-jenkins-platform}:${IMAGE_TAG:-local}"
+    # A fixed name is a guard, not cosmetics: it makes a second controller on
+    # the same JENKINS_HOME volume fail fast on a name clash instead of
+    # corrupting it (see "Concurrency" in the README).
+    container_name: jenkins-platform
+    restart: unless-stopped
+    init: true
+    user: "1000:1000"
+
+    environment:
+      # Fail fast and loudly rather than booting a controller that any Google
+      # account can log into, or whose OAuth redirect URI is wrong.
+      JENKINS_URL: "${JENKINS_URL:?set JENKINS_URL in .env - run make init}"
+      JENKINS_ADMIN_EMAIL: "${JENKINS_ADMIN_EMAIL:?set JENKINS_ADMIN_EMAIL in .env}"
+      GOOGLE_ALLOWED_DOMAINS: "${GOOGLE_ALLOWED_DOMAINS:?set GOOGLE_ALLOWED_DOMAINS in .env - an empty allowlist lets any Google account log in}"
+      JENKINS_CONTROLLER_EXECUTORS: "${JENKINS_CONTROLLER_EXECUTORS:-1}"
+      # Switched to /var/jenkins_conf/casc-recovery by `make recovery-up`.
+      CASC_JENKINS_CONFIG: "${CASC_JENKINS_CONFIG:-/var/jenkins_conf/casc}"
+      TZ: "${TZ:-Asia/Jakarta}"
+
+    secrets:
+      - google_oauth_client_id
+      - google_oauth_client_secret
+      - recovery_admin_password
+
+    ports:
+      # Loopback-only by default. Publishing 0.0.0.0 would expose a plain-HTTP
+      # login flow, and OAuth tokens, to the local network.
+      - "${JENKINS_HTTP_BIND:-127.0.0.1}:${JENKINS_HTTP_PORT:-8080}:8080"
+
+    volumes:
+      - jenkins_home:/var/jenkins_home
+
+    # ---- Hardening ----------------------------------------------------------
+    # No privilege escalation, no Linux capabilities (Jenkins needs none as an
+    # unprivileged user on an unprivileged port), and NO docker socket mount:
+    # /var/run/docker.sock inside this container would be equivalent to
+    # handing root on the host to anyone who can define a build.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    # Jenkins flushes state to $JENKINS_HOME on shutdown; killing it early is
+    # how build records and the plugin state get corrupted.
+    stop_grace_period: 60s
+
+    deploy:
+      resources:
+        limits:
+          memory: "${JENKINS_MEM_LIMIT:-2g}"
+          cpus: "${JENKINS_CPU_LIMIT:-2}"
+
+    # Bounded local logs. The audit trail is on stdout, so an unbounded
+    # json-file driver is a disk-exhaustion path on a long-lived controller.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+secrets:
+  google_oauth_client_id:
+    file: ./secrets/google_oauth_client_id
+  google_oauth_client_secret:
+    file: ./secrets/google_oauth_client_secret
+  recovery_admin_password:
+    file: ./secrets/recovery_admin_password
+
+volumes:
+  jenkins_home:
+    name: "${IMAGE_NAME:-jenkins-platform}_home"
