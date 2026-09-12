@@ -186,6 +186,8 @@ check_secrets() {
 		fi
 	done
 
+	check_secret_file_permissions
+
 	local client_id
 	client_id=$(env_get "$OAUTH_ENV" GOOGLE_OAUTH_CLIENT_ID)
 	if [ -n "$client_id" ]; then
@@ -195,6 +197,44 @@ check_secrets() {
 		esac
 	fi
 	pass_unless_failed "$before" "secrets rendered and current"
+}
+
+# Compose bind-mounts file secrets with their host ownership and permissions,
+# and the container runs as uid 1000. A secret the container cannot read makes
+# Jenkins die at boot with AccessDeniedException on /run/secrets/<name>, so the
+# readable bit is a startup requirement, not a style preference. Host-side
+# confidentiality is the directory's job (0700), not the file's.
+CONTAINER_UID=1000
+
+check_secret_file_permissions() {
+	local before=$FAILURES
+
+	if [ -d "$SECRET_DIR" ]; then
+		local dir_mode
+		dir_mode=$(file_mode "$SECRET_DIR")
+		case "$dir_mode" in
+		700 | 500) ;;
+		*) log_warn "vault/secrets mode ${dir_mode} lets other host users traverse it; chmod 700 it" ;;
+		esac
+	fi
+
+	local spec name f mode owner
+	for spec in "${SECRET_SPECS[@]}"; do
+		name=${spec%%:*}
+		f="${SECRET_DIR}/${name}"
+		[ -f "$f" ] || continue
+
+		mode=$(file_mode "$f")
+		owner=$(stat -c '%u' "$f" 2>/dev/null || stat -f '%u' "$f")
+
+		if [ $((8#$mode & 8#004)) -eq 0 ] && [ "$owner" != "$CONTAINER_UID" ]; then
+			fail "vault/secrets/${name} (mode ${mode}, owner uid ${owner}) is not readable by the container user (uid ${CONTAINER_UID})"
+			log_error "        Jenkins would fail at boot with AccessDeniedException on /run/secrets/${name}"
+			log_error "        fix with: make render"
+		fi
+	done
+
+	pass_unless_failed "$before" "secret files readable by the container user"
 }
 
 # ---------------------------------------------------------------------------

@@ -82,17 +82,39 @@ file_mode() {
 	stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
 }
 
-# Write a secret value with no trailing newline, 0600, and atomically: a
-# container starting concurrently must never observe a half-written secret.
+# Mode of the rendered secret files. 0644 is deliberate and is NOT a weaker
+# choice than 0600 here:
+#
+#   Compose (outside Swarm) bind-mounts a file secret into the container with
+#   the host file's ownership and permissions intact. The container runs as uid
+#   1000, while these files are owned by whoever ran `make init`. At 0600 the
+#   container cannot read them, and Jenkins dies at boot with
+#   AccessDeniedException on /run/secrets/<name>. The uid/gid/mode fields of a
+#   Compose secret are Swarm-only and ignored here, so the file mode is the
+#   only lever.
+#
+#   Host-side confidentiality comes from the directory instead: vault/secrets
+#   is 0700, so no other user on the host can traverse into it. Docker resolves
+#   the path once, as root, at mount time, so the container never needs that
+#   traversal. Inside the container the only readers are uid 1000 and root --
+#   exactly who needs the value.
+SECRET_FILE_MODE=644
+
+# Write a secret value with no trailing newline, atomically: a container
+# starting concurrently must never observe a half-written secret.
 # Returns 0 if the file changed, 1 if it was already correct.
 write_secret_file() {
 	local path=$1 value=$2 tmp
 	if [ -f "$path" ] && [ "$(cat "$path")" = "$value" ]; then
+		# The content is current but the mode may have drifted (or predate a
+		# change to SECRET_FILE_MODE), so enforce it regardless. This is what
+		# makes `make render` able to repair a file the container cannot read.
+		chmod "$SECRET_FILE_MODE" "$path"
 		return 1
 	fi
 	tmp=$(mktemp "${path}.XXXXXX")
 	printf '%s' "$value" >"$tmp"
-	chmod 600 "$tmp"
+	chmod "$SECRET_FILE_MODE" "$tmp"
 	mv -f "$tmp" "$path"
 	return 0
 }

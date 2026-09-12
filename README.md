@@ -105,6 +105,26 @@ give JCasC the literal text `GOOGLE_OAUTH_CLIENT_ID=...` as the client ID.
 `make up` and `make restart` re-render automatically, and `make validate` fails
 if a rendered secret is stale, so the two cannot silently drift.
 
+### File modes: why the secrets are 0644
+
+| Path | Mode | Reason |
+|---|---|---|
+| `vault/` and `vault/secrets/` | `0700` | This is the real host-side boundary: no other user can traverse in. |
+| `vault/*.env` | `0600` | Edited by a human, never read by the container. |
+| `vault/secrets/*` | `0644` | **Must** be readable by uid 1000 inside the container. |
+
+That last row looks wrong at a glance and is not. Compose (outside Swarm)
+bind-mounts a file secret with the host file's ownership and permissions
+intact, and the container runs as uid 1000 while these files are owned by
+whoever ran `make init`. At `0600` the container cannot read them and Jenkins
+dies at boot with `AccessDeniedException on /run/secrets/<name>`. The
+`uid`/`gid`/`mode` fields of a Compose secret are Swarm-only and ignored here,
+so the file mode is the only lever. Confidentiality is delegated to the `0700`
+directory: Docker resolves the path once, as root, at mount time, so the
+container never needs that traversal, and inside the container the only readers
+are uid 1000 and root. `make validate` fails if a rendered secret is not
+readable by the container user, and `make render` repairs the mode.
+
 ## 4. Build and run
 
 ```bash

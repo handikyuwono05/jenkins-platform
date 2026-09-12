@@ -20,11 +20,25 @@ install_err_trap
 
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-300}"
 HEALTH_INTERVAL="${HEALTH_INTERVAL:-5}"
-LOG_TAIL="${LOG_TAIL:-40}"
+LOG_TAIL="${LOG_TAIL:-60}"
 
+# A failed JCasC boot buries its cause under a long Jetty shutdown stack trace,
+# and a crash loop then starts a fresh boot on top of that -- so the plain tail
+# of the log often shows neither. Pull the causal lines out first.
 dump_logs() {
+	local logs causes
+	logs=$(compose logs --no-color --tail=400 jenkins 2>/dev/null || true)
+
+	causes=$(printf '%s\n' "$logs" | grep -E \
+		'SEVERE|ConfiguratorException|ConfigurationAsCodeBootFailure|UnknownAttributesException|AccessDeniedException|Caused by:|at jenkins\.yaml' |
+		head -15 || true)
+	if [ -n "$causes" ]; then
+		log_error "probable cause:"
+		printf '%s\n' "$causes" | sed 's/^/        /' >&2
+	fi
+
 	log_error "last ${LOG_TAIL} log lines:"
-	compose logs --no-color --tail="$LOG_TAIL" jenkins >&2 || true
+	printf '%s\n' "$logs" | tail -n "$LOG_TAIL" >&2
 }
 
 main() {
