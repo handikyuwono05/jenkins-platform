@@ -65,11 +65,12 @@ jenkins:
 
   # CSRF protection (OWASP A01). On by default; declared explicitly so that a
   # future edit removing it is visible in review.
-  # Set excludeClientIPFromCrumb to true only when running behind a proxy or
-  # load balancer where the client IP legitimately varies within a session.
-  crumbIssuer:
-    standard:
-      excludeClientIPFromCrumb: false
+  #
+  # Written as a bare symbol because DefaultCrumbIssuer has a no-argument
+  # @DataBoundConstructor: current Jenkins cores no longer put the client IP in
+  # the crumb at all, so the old excludeClientIPFromCrumb option is deprecated,
+  # unused, and rejected by JCasC as an unknown attribute.
+  crumbIssuer: "standard"
 
 security:
   # Legacy non-expiring API tokens cannot be audited or rotated cleanly.

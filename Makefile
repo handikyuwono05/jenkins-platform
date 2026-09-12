@@ -90,7 +90,8 @@ lint: ## Lint shell, Dockerfile and YAML (skips tools that are absent)
 	else echo "  skip    yamllint (not installed)"; fi
 	@if command -v hadolint >/dev/null 2>&1; then hadolint Dockerfile && echo "  ok      hadolint"; \
 	elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then \
-		docker run --rm -i hadolint/hadolint:latest hadolint - < Dockerfile && echo "  ok      hadolint (via docker)"; \
+		docker run --rm -v "$$PWD:/repo:ro" -w /repo hadolint/hadolint:latest hadolint Dockerfile \
+			&& echo "  ok      hadolint (via docker)"; \
 	else echo "  skip    hadolint (not installed, no docker)"; fi
 	@$(MAKE) --dry-run help >/dev/null && echo "  ok      Makefile parses"
 

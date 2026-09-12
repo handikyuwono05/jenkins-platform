@@ -22,8 +22,11 @@ LABEL org.opencontainers.image.title="jenkins-platform" \
 # curl is only needed for the container HEALTHCHECK below. Installed
 # explicitly so the healthcheck does not depend on what the base image
 # happens to ship.
-# hadolint ignore=DL3008
 USER root
+# DL3008 (pin apt versions) is ignored deliberately: pinning curl to an exact
+# Debian version would break every base-image bump, and the base image is
+# already pinned by digest, which is where reproducibility is actually anchored.
+# hadolint ignore=DL3008
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
@@ -54,5 +57,6 @@ EXPOSE 8080
 
 # /login is unauthenticated and rendered only once the security realm is
 # live, so it proves JCasC applied rather than merely that the JVM booted.
+# Exec form: no shell involved, and curl already exits non-zero on failure.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=120s --retries=12 \
-    CMD curl -fsS http://127.0.0.1:8080/login >/dev/null || exit 1
+    CMD ["curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8080/login"]

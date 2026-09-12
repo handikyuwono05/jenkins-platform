@@ -42,9 +42,8 @@ jenkins:
             permissions:
               - "Overall/Administer"
 
-  crumbIssuer:
-    standard:
-      excludeClientIPFromCrumb: false
+  # Bare symbol: DefaultCrumbIssuer takes no arguments (see casc/jenkins.yaml).
+  crumbIssuer: "standard"
 
 unclassified:
   location:

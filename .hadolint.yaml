@@ -1,0 +1,8 @@
+# hadolint configuration.
+#
+# failure-threshold: warning means info-level findings are reported but do not
+# fail the build. The one we accept is DL3066 (non-numeric user id) for
+# `USER root` / `USER jenkins`: the jenkins user is defined by the pinned base
+# image, and writing `USER 1000` instead would obscure intent without changing
+# behaviour.
+failure-threshold: warning

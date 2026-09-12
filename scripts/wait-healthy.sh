@@ -58,6 +58,16 @@ main() {
 			die "container exited while starting (status '${status}')"
 		fi
 
+		# With restart: unless-stopped a fatal startup error does not leave an
+		# exited container -- Docker keeps restarting it, so the check above
+		# never trips and we would burn the whole timeout. A restart count
+		# above zero means it is crash-looping: fail now, with the reason.
+		restarts=$(docker inspect -f '{{.RestartCount}}' "$cid")
+		if [ "$restarts" -gt 0 ]; then
+			dump_logs
+			die "container has restarted ${restarts} time(s): it is crash-looping, not starting slowly"
+		fi
+
 		if [ "$elapsed" -ge "$HEALTH_TIMEOUT" ]; then
 			dump_logs
 			die "still '${status}' after ${HEALTH_TIMEOUT}s -- JCasC usually names the offending key in the logs above"

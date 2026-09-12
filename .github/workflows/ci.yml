@@ -39,7 +39,11 @@ jobs:
         run: shellcheck -x -S style scripts/*.sh scripts/lib/*.sh
 
       - name: hadolint
-        run: docker run --rm -i hadolint/hadolint:latest hadolint - < Dockerfile
+        # Mount the repo rather than piping on stdin, so hadolint picks up
+        # .hadolint.yaml from the working directory.
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" -w /repo \
+            hadolint/hadolint:latest hadolint Dockerfile
 
       - name: yamllint
         run: |
