@@ -1,7 +1,12 @@
 # Compose definition for the Jenkins controller.
 #
-# Secrets are file-mounted (not environment variables) so they do not appear
-# in `docker inspect`, in the container's /proc/1/environ, or in crash dumps.
+# Interpolation of ${...} below comes from vault/jenkins.env, which the Makefile
+# passes as --env-file.
+#
+# Secrets are file-mounted (not environment variables) so they do not appear in
+# `docker inspect`, in the container's /proc/1/environ, or in crash dumps. The
+# files under vault/secrets/ are GENERATED from vault/*.env by
+# scripts/vaultctl.sh render -- do not edit them by hand.
 name: jenkins-platform
 
 services:
@@ -26,9 +31,9 @@ services:
     environment:
       # Fail fast and loudly rather than booting a controller that any Google
       # account can log into, or whose OAuth redirect URI is wrong.
-      JENKINS_URL: "${JENKINS_URL:?set JENKINS_URL in .env - run make init}"
-      JENKINS_ADMIN_EMAIL: "${JENKINS_ADMIN_EMAIL:?set JENKINS_ADMIN_EMAIL in .env}"
-      GOOGLE_ALLOWED_DOMAINS: "${GOOGLE_ALLOWED_DOMAINS:?set GOOGLE_ALLOWED_DOMAINS in .env - an empty allowlist lets any Google account log in}"
+      JENKINS_URL: "${JENKINS_URL:?set JENKINS_URL in vault/jenkins.env - run make init}"
+      JENKINS_ADMIN_EMAIL: "${JENKINS_ADMIN_EMAIL:?set JENKINS_ADMIN_EMAIL in vault/jenkins.env}"
+      GOOGLE_ALLOWED_DOMAINS: "${GOOGLE_ALLOWED_DOMAINS:?set GOOGLE_ALLOWED_DOMAINS in vault/jenkins.env - an empty allowlist lets any Google account log in}"
       JENKINS_CONTROLLER_EXECUTORS: "${JENKINS_CONTROLLER_EXECUTORS:-1}"
       # Switched to /var/jenkins_conf/casc-recovery by `make recovery-up`.
       CASC_JENKINS_CONFIG: "${CASC_JENKINS_CONFIG:-/var/jenkins_conf/casc}"
@@ -77,11 +82,11 @@ services:
 
 secrets:
   google_oauth_client_id:
-    file: ./secrets/google_oauth_client_id
+    file: ./vault/secrets/google_oauth_client_id
   google_oauth_client_secret:
-    file: ./secrets/google_oauth_client_secret
+    file: ./vault/secrets/google_oauth_client_secret
   recovery_admin_password:
-    file: ./secrets/recovery_admin_password
+    file: ./vault/secrets/recovery_admin_password
 
 volumes:
   jenkins_home:

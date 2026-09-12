@@ -1,0 +1,134 @@
+# CI for jenkins-platform.
+#
+# The point of the build-and-smoke job is that it actually BOOTS the controller
+# and asserts against it. A Jenkins whose JCasC file has one wrong key builds
+# perfectly and then fails at startup, so "the image built" proves very little.
+#
+# Note on actions: only actions/checkout is used, and it is referenced by major
+# tag. In a regulated environment, pin third-party actions to a full commit SHA
+# (a tag is mutable, exactly like a Docker tag) and review bumps.
+name: ci
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  schedule:
+    # Weekly: catch a moved base-image digest even when nobody pushes.
+    - cron: '17 2 * * 1'
+  workflow_dispatch:
+
+# Least privilege: nothing here needs to write to the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck
+        # shellcheck is preinstalled on GitHub-hosted runners.
+        run: shellcheck -x -S style scripts/*.sh scripts/lib/*.sh
+
+      - name: hadolint
+        run: docker run --rm -i hadolint/hadolint:latest hadolint - < Dockerfile
+
+      - name: yamllint
+        run: |
+          python3 -m pip install --quiet --user yamllint
+          "$(python3 -m site --user-base)/bin/yamllint" -s \
+            casc/ casc-recovery/ docker-compose.yml .github/
+
+      - name: Makefile parses
+        run: make --dry-run help > /dev/null
+
+      - name: Offline preflight (no Docker daemon needed)
+        run: |
+          ./scripts/vaultctl.sh init
+          printf '%s' 'ci-dummy-client.apps.googleusercontent.com' \
+            | ./scripts/vaultctl.sh set oauth GOOGLE_OAUTH_CLIENT_ID --stdin
+          printf '%s' 'ci-dummy-secret' \
+            | ./scripts/vaultctl.sh set oauth GOOGLE_OAUTH_CLIENT_SECRET --stdin
+          sed -i \
+            -e 's|^JENKINS_ADMIN_EMAIL=.*|JENKINS_ADMIN_EMAIL=ci-admin@example.com|' \
+            -e 's|^GOOGLE_ALLOWED_DOMAINS=.*|GOOGLE_ALLOWED_DOMAINS=example.com|' \
+            vault/jenkins.env
+          ./scripts/preflight.sh --no-docker
+
+  build-and-smoke:
+    name: build and smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bootstrap a CI vault
+        # Dummy OAuth credentials are sufficient: the Google Login plugin does
+        # not contact Google until someone actually signs in, so the controller
+        # boots and serves its login page with placeholder values. That is
+        # enough to prove the JCasC configuration applied.
+        run: |
+          ./scripts/vaultctl.sh init
+          printf '%s' 'ci-dummy-client.apps.googleusercontent.com' \
+            | ./scripts/vaultctl.sh set oauth GOOGLE_OAUTH_CLIENT_ID --stdin
+          printf '%s' 'ci-dummy-secret' \
+            | ./scripts/vaultctl.sh set oauth GOOGLE_OAUTH_CLIENT_SECRET --stdin
+          sed -i \
+            -e 's|^JENKINS_ADMIN_EMAIL=.*|JENKINS_ADMIN_EMAIL=ci-admin@example.com|' \
+            -e 's|^GOOGLE_ALLOWED_DOMAINS=.*|GOOGLE_ALLOWED_DOMAINS=example.com|' \
+            vault/jenkins.env
+
+      - name: Preflight
+        run: make validate
+
+      - name: Build image
+        run: make build
+
+      - name: Start controller
+        run: make up
+
+      - name: Wait for healthy
+        run: make wait
+        env:
+          HEALTH_TIMEOUT: '420'
+
+      # The real verification: login page served, Google realm applied,
+      # anonymous denied, no JCasC errors.
+      - name: Smoke tests
+        run: make smoke
+
+      - name: Recovery mode boots too
+        # The break-glass path is only useful if it works when it is needed,
+        # which is precisely when nobody can log in to test it.
+        run: |
+          make recovery-up
+          make wait
+          curl -fsS -o /dev/null -w 'recovery /login -> %{http_code}\n' \
+            http://127.0.0.1:8080/login
+
+      - name: Container logs on failure
+        if: failure()
+        run: make logs-dump
+
+      - name: Tear down
+        if: always()
+        run: make down
+
+  supply-chain:
+    name: supply chain
+    # A mutable tag can move under a pin; on the weekly run, fail if it has.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Base image digest is still current
+        run: ./scripts/supply-chain.sh base-digest

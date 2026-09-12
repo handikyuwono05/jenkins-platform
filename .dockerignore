@@ -1,5 +1,5 @@
-# Deny-by-default: only the build inputs below enter the build context,
-# so secrets/ and .env can never be baked into an image layer.
+# Deny-by-default: only the build inputs below enter the build context, so
+# vault/ (secrets) can never be baked into an image layer.
 *
 !plugins.txt
 !casc

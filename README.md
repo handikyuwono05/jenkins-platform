@@ -5,10 +5,12 @@ authentication via **Google OAuth 2.0**, authorisation, hardening and audit
 logging all live in version-controlled YAML. No setup wizard, no clicking
 through Manage Jenkins, no secrets in the image or the repository.
 
+[![ci](https://github.com/handikyuwono05/jenkins-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/handikyuwono05/jenkins-platform/actions/workflows/ci.yml)
+
 ```bash
-make init          # create .env + secrets/ skeleton
+make init          # generate vault/*.env from template/*.env.example
 make oauth-info    # the exact redirect URI to register in Google Cloud
-#                  ... fill in secrets/ and .env ...
+#                  ... fill in vault/oauth.env and vault/jenkins.env ...
 make run           # validate, build, start, wait for healthy
 make smoke         # prove login works and anonymous access is denied
 ```
@@ -58,30 +60,50 @@ make smoke         # prove login works and anonymous access is denied
 make init
 ```
 
-Creates (and never overwrites):
+`scripts/vaultctl.sh init` copies every `template/*.env.example` to
+`vault/<name>.env`, generates a random break-glass password, and renders the
+Compose secret files. It never overwrites an existing file, so it is safe to
+re-run.
 
-- `.env` — non-sensitive settings, from `.env.example`
-- `secrets/google_oauth_client_id`, `secrets/google_oauth_client_secret` — **empty**, fill these in
-- `secrets/recovery_admin_password` — random 24-byte break-glass password
-
-Then fill in the two OAuth values and edit `.env`:
-
-```bash
-printf '%s' '1234-abc.apps.googleusercontent.com' > secrets/google_oauth_client_id
-printf '%s' 'GOCSPX-...'                          > secrets/google_oauth_client_secret
-chmod 600 secrets/*
+```
+template/                      committed, non-sensitive
+  jenkins.env.example          -> vault/jenkins.env    settings
+  oauth.env.example            -> vault/oauth.env      OAuth credentials
+  recovery.env.example         -> vault/recovery.env   break-glass password
+vault/                         gitignored, mode 0700
+  *.env                        you edit these -- the source of truth
+  secrets/<name>               GENERATED, do not edit; mounted at /run/secrets
 ```
 
-Use `printf`, not `echo` — a trailing newline in a secret file is a confusing
-class of bug. (JCasC trims it, but not every consumer does.)
+Put the OAuth credentials in place. Prefer stdin — a value passed as an
+argument is visible in your shell history and in the process list, and
+`vaultctl set` warns when you do that:
 
-Required in `.env`:
+```bash
+printf '%s' '1234-abc.apps.googleusercontent.com' \
+  | ./scripts/vaultctl.sh set oauth GOOGLE_OAUTH_CLIENT_ID --stdin
+
+make set-oauth KEY=GOOGLE_OAUTH_CLIENT_SECRET   # reads stdin, same thing
+```
+
+Then edit `vault/jenkins.env`:
 
 | Variable | Meaning |
 |---|---|
 | `JENKINS_URL` | Public root URL, **with trailing slash**. The OAuth redirect URI derives from it. |
 | `JENKINS_ADMIN_EMAIL` | Google account granted `Overall/Administer`. |
 | `GOOGLE_ALLOWED_DOMAINS` | Comma-separated Workspace domain allowlist. **Never leave empty.** |
+
+`make show` prints which values are populated without ever printing a value.
+
+### Why two layers
+
+`vault/*.env` is what a human edits; `vault/secrets/*` is what Compose mounts.
+The split exists because Docker secrets are *value-only* files, while an
+`.env` file is a set of key/value pairs — mounting the latter as a secret would
+give JCasC the literal text `GOOGLE_OAUTH_CLIENT_ID=...` as the client ID.
+`make up` and `make restart` re-render automatically, and `make validate` fails
+if a rendered secret is stale, so the two cannot silently drift.
 
 ## 4. Build and run
 
@@ -90,17 +112,18 @@ make run     # = validate + build + up + wait + oauth-info
 make smoke   # assertions against the running controller
 ```
 
-`make validate` runs first and refuses to start on any of these:
+`make validate` runs first and refuses to start on any of these. It reports
+**every** problem it finds in one pass rather than stopping at the first:
 
 - a required variable unset, or still holding the placeholder domain
 - `JENKINS_URL` without a trailing slash, or plain `http` off localhost
 - `JENKINS_ADMIN_EMAIL` in a domain absent from `GOOGLE_ALLOWED_DOMAINS`
   (**this is the lockout case**: authentication succeeds, then no one holds
   `Overall/Administer`)
-- a missing or empty secret file
+- an empty OAuth value, or a rendered secret that is stale
 - the pinned base-image digest having drifted between `Dockerfile`,
-  `docker-compose.yml` and `.env.example`
-- a secret or `.env` having become tracked by git
+  `docker-compose.yml` and `template/jenkins.env.example`
+- anything under `vault/` having become tracked by git
 
 It warns, without blocking, on `gmail.com` in the allowlist (that is every
 consumer Google account — effectively no restriction) and on secret files that
@@ -110,6 +133,8 @@ are group- or world-readable.
 
 ```bash
 make help              # every target
+make show              # which vault values are set (never prints values)
+make lint              # shellcheck + hadolint + yamllint
 make logs              # follow controller logs
 make audit             # only audit-trail entries: who did what
 make ps / restart / down
@@ -147,16 +172,46 @@ Secrets are Compose file-secrets, so they never appear in the image, in
 ### Repository layout
 
 ```
-Dockerfile              controller image; base pinned by tag AND digest
-plugins.txt             plugin set, resolved at build time (never at boot)
-docker-compose.yml      runtime: file-secrets, hardening, limits, log rotation
-Makefile                build/run/validate/operate
-casc/jenkins.yaml       THE configuration: OAuth realm, authorisation, audit
-casc-recovery/          break-glass local admin, used only on demand
+Dockerfile                 controller image; base pinned by tag AND digest
+plugins.txt                plugin set, resolved at build time (never at boot)
+docker-compose.yml         runtime: file-secrets, hardening, limits, log rotation
+Makefile                   thin: sequences targets, delegates to scripts/
+casc/jenkins.yaml          THE configuration: OAuth realm, authorisation, audit
+casc-recovery/             break-glass local admin, used only on demand
 config/logging.properties  single-line stdout logging
-secrets/                gitignored runtime secrets (see secrets/README.md)
-.env.example            documented settings template
+template/*.env.example     committed, non-sensitive settings templates
+vault/                     gitignored: generated *.env plus rendered secrets/
+scripts/
+  lib/log.sh               leveled logging (text or JSON), ERR traps
+  lib/common.sh            env parsing, atomic writes, compose wrapper
+  vaultctl.sh              init / render / set / show / oauth-info / rotate
+  preflight.sh             all validation, read-only
+  wait-healthy.sh          health polling with log dump on failure
+  smoke.sh                 post-boot security assertions
+  supply-chain.sh          base-digest / plugins-freeze
+  backup.sh                cold create / restore
+.github/workflows/ci.yml   lint, build + boot + smoke, weekly digest check
 ```
+
+### Code conventions
+
+The Makefile sequences targets; it does not contain logic. Everything else
+lives in `scripts/`, which is shellcheck-clean at `-S style` and enforced by CI.
+Each script sets `set -euo pipefail`, installs an `ERR` trap that reports the
+failing file, line and command, and logs through `scripts/lib/log.sh`:
+timestamped and levelled, to stderr so stdout stays usable for data, and
+switchable to one-JSON-object-per-line for a log shipper.
+
+```bash
+LOG_FORMAT=json LOG_LEVEL=debug make validate
+```
+
+Deliberate choices worth knowing: `.env` files are parsed with awk rather than
+sourced (sourcing executes a data file and mishandles values containing
+spaces); secret writes go to a temp file and are `mv`'d into place, so a
+container starting concurrently can never read a half-written secret; and
+`vaultctl` refuses to print the break-glass password when stdout is not a
+terminal, which is what keeps it out of CI logs.
 
 ---
 
@@ -176,6 +231,7 @@ The choices below are deliberate; each names the risk it addresses.
 | Misconfiguration (A05) | `cap_drop: ALL`, `no-new-privileges`, non-root uid 1000, loopback-only port | Least privilege at the container boundary. |
 | Vulnerable components (A06) | Base image pinned by digest; `make base-digest`; `make plugins-freeze` | A tag is mutable; a digest is not. Upgrades become reviewed commits. |
 | Identification failures (A07) | `disableRememberMe: true`, legacy API tokens disabled | Long-lived credentials on a system holding deployment secrets are not worth the convenience. |
+| Vulnerable components (A06) | CI boots the controller and fails on JCasC errors | A config that only *parses* is not a config that *applies*. |
 | Logging failures (A09) | audit-trail plugin → stdout; bounded json-file driver | "Who changed what" evidence for access reviews and change management, with no unbounded disk growth. |
 
 Controller executors default to **1** so the stack is useful immediately. In
@@ -199,7 +255,7 @@ store and the secret key that encrypts it.
 - **Backups are cold.** `make backup` stops the container, archives, and
   restarts. Archiving a live `JENKINS_HOME` yields a crash-consistent copy that
   may restore into a broken state.
-- **`.env` is parsed, never sourced.** Sourcing would execute the file's
+- **Env files are parsed, never sourced.** Sourcing would execute the file's
   contents and would mis-handle valid values containing spaces.
 
 ### Locked out? Break-glass recovery
@@ -209,7 +265,7 @@ cannot rescue a broken login — the next restart overwrites it. Instead:
 
 ```bash
 make recovery-up     # prints the local recovery-admin password, restarts with OAuth OFF
-#                    ... fix casc/jenkins.yaml or .env ...
+#                    ... fix casc/jenkins.yaml or vault/jenkins.env ...
 make recovery-down   # back to Google OAuth
 make recovery-rotate # rotate the break-glass password after use
 ```
@@ -217,6 +273,30 @@ make recovery-rotate # rotate the break-glass password after use
 Recovery mode is never the default (it requires pointing
 `CASC_JENKINS_CONFIG` at `casc-recovery/`), runs with zero executors and no
 agent port, and every entry into it is visible in the container logs.
+
+---
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push and pull request:
+
+| Job | What it does | Why |
+|---|---|---|
+| `lint` | shellcheck (`-x -S style`), hadolint, yamllint, `make --dry-run`, offline preflight | Catches the mistakes that are cheap to find without a daemon. |
+| `build-and-smoke` | Bootstraps a throwaway vault, builds the image, **starts the controller**, waits for healthy, runs the smoke assertions, then boots recovery mode | A wrong JCasC key builds perfectly and fails at startup. Only a real boot proves the configuration applies. |
+| `supply-chain` | Weekly (and on demand): fails if the pinned base digest no longer matches the published tag | A mutable tag can move under a pin. |
+
+The CI vault uses dummy OAuth credentials, which is sufficient: the Google
+Login plugin does not contact Google until someone actually signs in, so the
+controller boots and serves its login page. The smoke step then asserts the
+realm applied and that anonymous users are denied — the security properties,
+not just liveness. Recovery mode is booted too, because a break-glass path is
+needed exactly when nobody can log in to test it.
+
+The workflow declares `permissions: contents: read` and uses only
+`actions/checkout`. In a regulated environment, pin that action to a full
+commit SHA rather than a major tag — a tag is mutable for the same reason a
+Docker tag is.
 
 ---
 
@@ -261,11 +341,18 @@ Every JCasC key here was checked against the plugins' own source rather than
 written from memory — `googleOAuth2` (`clientId`/`clientSecret`/`domain`), the
 `securityRealm/finishLogin` callback path, `globalMatrix.entries` with
 `user`/`group` children, `audit-trail` with its `console` logger, and JCasC's
-`/run/secrets/<name>` file-secret resolution. The base image digest was resolved
-from Docker Hub and matches tag `2.568.3-lts-jdk21`.
+`/run/secrets/<name>` file-secret resolution. The base image digest was
+resolved from Docker Hub and matches tag `2.568.3-lts-jdk21`.
 
-The YAML and Makefile parse, and the preflight guards were executed against
-valid and invalid inputs. **The image build and Jenkins boot were not executed**,
-because no Docker daemon was available in the environment where this was
-authored. Run `make run && make smoke` once; if JCasC rejects a key it fails
-fast at boot and names it in `make logs`.
+Locally verified: shellcheck clean at `-S style` across all scripts, yamllint
+clean, the Makefile parses, and the preflight guards were exercised against
+valid and invalid inputs — missing trailing slash, admin outside the allowlist,
+plain HTTP off localhost, empty and stale secrets, drifted digest pin, and an
+attempted command injection through an env file.
+
+**The image build and Jenkins boot were not executed locally**, because no
+Docker daemon was available in the environment where this was authored. That
+is exactly the gap `build-and-smoke` closes: the first CI run on this branch
+either goes green — proving the image builds, JCasC applies, the login page
+serves Google sign-in, anonymous access is denied and recovery mode boots — or
+it fails and names the offending key in the job log.

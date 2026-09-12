@@ -1,0 +1,18 @@
+# yamllint configuration.
+#
+# Two deliberate relaxations, both about readability rather than laxity:
+#   - line-length: pinned image digests and JCasC comments legitimately exceed
+#     80 columns, and wrapping a sha256 pin would make it harder to verify.
+#   - truthy: GitHub Actions requires the key `on:`, which yamllint would
+#     otherwise flag as a truthy value.
+extends: default
+
+rules:
+  line-length:
+    max: 160
+    allow-non-breakable-words: true
+  truthy:
+    check-keys: false
+  comments:
+    min-spaces-from-content: 1
+  document-start: disable

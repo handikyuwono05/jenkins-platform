@@ -1,9 +1,11 @@
-# Secrets and local configuration must never be committed.
-.env
-secrets/*
-!secrets/.gitkeep
-!secrets/README.md
+# The vault holds real configuration and secrets: never commit any of it.
+# It is created by `make init` from template/*.env.example, which IS committed.
+# Note: a trailing-slash pattern excludes the whole tree -- a negation such as
+# !vault/.gitkeep would not work, because git does not descend into an
+# excluded directory. The vault is fully generated, so nothing in it is tracked.
+vault/
 
 # Local artifacts
 backups/
+plugins.lock.txt.*
 .make-lock/
