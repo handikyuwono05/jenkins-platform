@@ -1,0 +1,61 @@
+# ---------------------------------------------------------------------------
+# BREAK-GLASS configuration. Not used unless explicitly selected via
+# `make recovery-up`.
+#
+# Purpose: a misconfigured OAuth client, an expired secret or a wrong admin
+# email locks every human out of a controller whose configuration is
+# reapplied on each boot -- editing config.xml by hand cannot help, because
+# JCasC overwrites it. This file swaps in a local account so an operator can
+# get back in, diagnose, and then return to the OAuth configuration.
+#
+# Controls that make this acceptable rather than a backdoor:
+#   - it is never the default (CASC_JENKINS_CONFIG must be pointed at it)
+#   - the password comes from ./secrets/recovery_admin_password, generated
+#     locally, never committed
+#   - no executors, no agent port: nothing can be built from this mode
+#   - every entry into recovery mode is visible in the container logs
+# Rotate the password after each use.
+# ---------------------------------------------------------------------------
+jenkins:
+  systemMessage: >-
+    RECOVERY MODE -- local break-glass account in use, Google OAuth is
+    DISABLED. Diagnose, fix casc/jenkins.yaml, then `make recovery-down`
+    followed by `make up`. Rotate the recovery password afterwards.
+
+  numExecutors: 0
+  slaveAgentPort: -1
+  disableRememberMe: true
+
+  securityRealm:
+    local:
+      allowsSignup: false
+      enableCaptcha: false
+      users:
+        - id: "recovery-admin"
+          password: "${recovery_admin_password}"
+
+  authorizationStrategy:
+    globalMatrix:
+      entries:
+        - user:
+            name: "recovery-admin"
+            permissions:
+              - "Overall/Administer"
+
+  # Bare symbol: DefaultCrumbIssuer takes no arguments (see casc/jenkins.yaml).
+  crumbIssuer: "standard"
+
+unclassified:
+  location:
+    url: "${JENKINS_URL}"
+    adminAddress: "${JENKINS_ADMIN_EMAIL}"
+  audit-trail:
+    logBuildCause: true
+    logCredentialsUsage: true
+    displayUserName: true
+    logScriptUsage: true
+    loggers:
+      - console:
+          output: STD_OUT
+          dateFormat: "yyyy-MM-dd HH:mm:ss.SSS"
+          logPrefix: "AUDIT-RECOVERY"

@@ -1,0 +1,13 @@
+# Deliberately minimal: every plugin is attack surface and an upgrade
+# obligation. Unpinned == resolved against the pinned core at build time.
+# Freeze exact versions for production with `make plugins-freeze`.
+configuration-as-code
+google-login
+matrix-auth
+audit-trail
+workflow-aggregator
+git
+credentials-binding
+timestamper
+build-timeout
+ws-cleanup

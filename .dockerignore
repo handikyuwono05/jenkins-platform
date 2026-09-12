@@ -1,0 +1,7 @@
+# Deny-by-default: only the build inputs below enter the build context, so
+# vault/ (secrets) can never be baked into an image layer.
+*
+!plugins.txt
+!casc
+!casc-recovery
+!config

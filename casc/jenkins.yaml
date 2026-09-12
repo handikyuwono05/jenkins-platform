@@ -1,0 +1,103 @@
+# ---------------------------------------------------------------------------
+# Jenkins Configuration as Code -- single source of truth for this controller.
+#
+# Applied on every boot. Anything changed through the web UI is overwritten on
+# the next restart, which is what makes this configuration auditable and
+# reviewable in git.
+#
+# Value resolution:
+#   ${NAME}  -> environment variable (non-sensitive settings), OR
+#   ${name}  -> contents of /run/secrets/<name> (JCasC DockerSecretSource)
+# Secrets are therefore never present in the image, in `docker inspect`, or in
+# this repository.
+# ---------------------------------------------------------------------------
+jenkins:
+  systemMessage: >-
+    Managed by Configuration as Code. Changes made in this UI are reverted on
+    restart -- submit a pull request against casc/jenkins.yaml instead.
+
+  # The controller must not execute build workloads: a build running here has
+  # the controller's filesystem, credentials and JENKINS_HOME within reach.
+  # 1 is a convenience default for local evaluation; set 0 in production and
+  # attach dedicated agents.
+  numExecutors: "${JENKINS_CONTROLLER_EXECUTORS:-1}"
+  mode: NORMAL
+
+  # No inbound agent listener is needed while there are no external agents.
+  # -1 disables the port outright rather than leaving it on a random port.
+  slaveAgentPort: -1
+
+  # "Remember me" extends session lifetime well beyond the browser session;
+  # for a system holding deployment credentials that trade-off is not worth it.
+  disableRememberMe: true
+
+  # ---- Authentication: Google OAuth 2.0 -----------------------------------
+  # domain is the single most important field here. Left empty, ANY Google
+  # account on the internet passes authentication (OWASP A01, broken access
+  # control). It is a comma-separated allowlist of Workspace domains and is
+  # required by this configuration.
+  securityRealm:
+    googleOAuth2:
+      clientId: "${google_oauth_client_id}"
+      clientSecret: "${google_oauth_client_secret}"
+      domain: "${GOOGLE_ALLOWED_DOMAINS}"
+
+  # ---- Authorisation: explicit allowlist ----------------------------------
+  # Authentication only proves who someone is. Without this block a
+  # successfully authenticated user would inherit Jenkins' permissive
+  # defaults. Anonymous is absent from the matrix and therefore has no
+  # permission at all, including read.
+  #
+  # With googleOAuth2 the user ID is the full email address.
+  authorizationStrategy:
+    globalMatrix:
+      entries:
+        - group:
+            name: "authenticated"
+            permissions:
+              - "Overall/Read"
+              - "Job/Read"
+              - "View/Read"
+        - user:
+            name: "${JENKINS_ADMIN_EMAIL}"
+            permissions:
+              - "Overall/Administer"
+
+  # CSRF protection (OWASP A01). On by default; declared explicitly so that a
+  # future edit removing it is visible in review.
+  #
+  # Written as a bare symbol because DefaultCrumbIssuer has a no-argument
+  # @DataBoundConstructor: current Jenkins cores no longer put the client IP in
+  # the crumb at all, so the old excludeClientIPFromCrumb option is deprecated,
+  # unused, and rejected by JCasC as an unknown attribute.
+  crumbIssuer: "standard"
+
+security:
+  # Legacy non-expiring API tokens cannot be audited or rotated cleanly.
+  apiToken:
+    creationOfLegacyTokenEnabled: false
+    tokenGenerationOnCreationEnabled: false
+
+unclassified:
+  # MANDATORY for Google OAuth: the plugin derives its redirect URI from this
+  # value as <url>securityRealm/finishLogin. If it is unset, login throws
+  # "Jenkins root url should not be null"; if it does not match the URI
+  # registered in Google Cloud, Google returns redirect_uri_mismatch.
+  location:
+    url: "${JENKINS_URL}"
+    adminAddress: "${JENKINS_ADMIN_EMAIL}"
+
+  # Audit trail (OWASP A09, and the "who changed what" evidence auditors and
+  # OJK-regulated change-management processes ask for). Emitted to stdout so
+  # the container log shipper is the single collection path -- no log file
+  # inside the container to rotate or lose.
+  audit-trail:
+    logBuildCause: true
+    logCredentialsUsage: true
+    displayUserName: true
+    logScriptUsage: true
+    loggers:
+      - console:
+          output: STD_OUT
+          dateFormat: "yyyy-MM-dd HH:mm:ss.SSS"
+          logPrefix: "AUDIT"
